@@ -268,7 +268,7 @@ cdcacm_u32dump(usbd_device *usbd_dev, uint32_t data)
 	*p++ = hexnibble((data & 0x000f0000) >> 16);
 	*p++ = hexnibble((data & 0x0000f000) >> 12);
 	*p++ = hexnibble((data & 0x00000f00) >> 8);
-	*p++ = hexnibble((data & 0x000000f0) >> 4);
+	*p++ = hexnibble((data/ & 0x000000f0) >> 4);
 	*p++ = hexnibble((data & 0x0000000f));
 	*p++ = '\r';
 	*p++ = '\n';
@@ -294,19 +294,11 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 		case '0' ... '9':
 			kbd_row = usb_rxbuf[i] - '0';
 			break;
-		case 'A' ... 'F': /* A=0, B=1, C=2, D=3, E=4, F=5 */
+		case 'A' ... 'H': /* A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7 */
 			kbd_col = usb_rxbuf[i] - 'A';
 			break;
-		case 'a' ... 'f': /* a=0, b=1, c=2, d=3, e=4, f=5 */
+		case 'a' ... 'h': /* a=0, b=1, c=2, d=3, e=4, f=5, g=6, h=7 */
 			kbd_col = usb_rxbuf[i] - 'a';
-			break;
-		case 'H':
-		case 'h': /* H,h = 6 */
-			kbd_col = 6;
-			break;
-		case 'J':
-		case 'j': /* J,j = 7 */
-			kbd_col = 7;
 			break;
 		case 'x':
 			for (int j = 0; j < 8; j++)

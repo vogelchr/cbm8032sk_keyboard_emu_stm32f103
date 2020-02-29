@@ -54,48 +54,14 @@
  *                      a time
  */
 
-/*
- There is a switch matrix on the "Schematic 320284 Keyboard, Business"
- and a decoding table found on http://www.6502.org/users/andre/petindex/keyboards.html
-
-----+------------------------
-row |  7  6  5  4  3  2  1  0
-----+------------------------
- 9  | 16 04 3A 03 39 36 33 DF
-    | ^V --  : ^C  9  6  3 <-   ^V = TAB + <- + DEL, ^C = STOP,
-    |                            <- = left arrow
- 8  | B1 2F 15 13 4D 20 58 12
-    | k1  / ^U ^S  m sp  x ^R   k9 = keypad 9, ^U = RVS + A + L,
-    |                           ^S = HOME, sp = space, ^R = RVS
- 7  | B2 10 0F B0 2C 4E 56 5A   ^O = Z + A + L, rp = repeat
-    | k2 rp ^O k0  ,  n  v  z
-    |
- 6  | B3 00 19 AE 2E 42 43 00
-    | k3 rs ^Y k.  .  b  c ls   ^Y = left shift + TAB + I, k. = keypad .
-    |                           ls = left shift, rs = right shift
- 5  | B4 DB 4F 11 55 54 45 51   ^Q = cursor down
-    | k4  [  o ^Q  u  t  e  q
-    |    5D]
- 4  | 14 50 49 DC 59 52 57 09
-    | ^T  p  i  \  y  r  w ^I   ^T = DEL, ^I = TAB
-    |          C0@
- 3  | B6 C0 4C 0D 4A 47 44 41
-    | k6  @  l ^M  j  g  d  a   ^M = return
-    |    5B[
- 2  | B5 3B 4B DD 48 46 53 9B
-    | k5  ;  k  ]  h  f  s ^[   ^[ = ESC
-    |    5C\   3B;
- 1  | B9 06 DE B7 B0 37 34 31
-    | k9 --  ^ k7  0  7  4  1
-    |
- 0  | 05 0E 1D B8 2D 38 35 32
-    |  . ^N ^] k8  -  8  5  2   ^N = both shifts + 2, ^] = cursor right
-----+------------------------
- */
-
 /* kbd_matrix[row] = 1<<col, a set bit corresponds to a pushed key */
 uint8_t kbd_matrix[10];
+
 unsigned int kbd_flags; /* mainly for debugging, stores current state of I/O */
+
+/* there are a lot of runt pulses while the BCD decoder switches,
+   this is annoying, we just debounce them very simply */
+#define ROW_SEL_CTR_INIT 16
 
 void kbd_matrix_update(void)
 {
@@ -103,8 +69,22 @@ void kbd_matrix_update(void)
 	uint16_t col_ret;
 	uint16_t row_sel;
 
+	static uint16_t row_sel_last;
+	static uint16_t row_sel_ctr;
+
 	/* row selection is via GPIOA, bits 0..9, active low! */
-	row_sel = gpio_get(GPIOA, GPIO_ALL);
+	row_sel = gpio_get(GPIOA, 0x03ff);
+	if (row_sel != row_sel_last)
+	{
+		row_sel_ctr = ROW_SEL_CTR_INIT;
+		return;
+	}
+
+	if (row_sel_ctr)
+	{
+		row_sel_ctr--;
+		return;
+	}
 
 	/* column return will be the wired and of rows */
 	col_ret = 0xff;
