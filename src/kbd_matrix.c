@@ -59,33 +59,14 @@ uint8_t kbd_matrix[10];
 
 unsigned int kbd_flags; /* mainly for debugging, stores current state of I/O */
 
-/* there are a lot of runt pulses while the BCD decoder switches,
-   this is annoying, we just debounce them very simply */
-#define ROW_SEL_CTR_INIT 16
-
 void kbd_matrix_update(void)
 {
 	int i;
 	uint16_t col_ret;
 	uint16_t row_sel;
 
-	static uint16_t row_sel_last;
-	static uint16_t row_sel_ctr;
-
 	/* row selection is via GPIOA, bits 0..9, active low! */
 	row_sel = gpio_get(GPIOA, 0x03ff);
-	if (row_sel != row_sel_last)
-	{
-		row_sel_ctr = ROW_SEL_CTR_INIT;
-		return;
-	}
-
-	if (row_sel_ctr)
-	{
-		row_sel_ctr--;
-		return;
-	}
-
 	/* column return will be the wired and of rows */
 	col_ret = 0xff;
 

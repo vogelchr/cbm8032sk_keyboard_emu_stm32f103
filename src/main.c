@@ -268,7 +268,7 @@ cdcacm_u32dump(usbd_device *usbd_dev, uint32_t data)
 	*p++ = hexnibble((data & 0x000f0000) >> 16);
 	*p++ = hexnibble((data & 0x0000f000) >> 12);
 	*p++ = hexnibble((data & 0x00000f00) >> 8);
-	*p++ = hexnibble((data/ & 0x000000f0) >> 4);
+	*p++ = hexnibble((data & 0x000000f0) >> 4);
 	*p++ = hexnibble((data & 0x0000000f));
 	*p++ = '\r';
 	*p++ = '\n';
@@ -282,29 +282,37 @@ static int kbd_row = 0;
 static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
 	(void)ep;
-	int len, kbd_col;
+	char c;
+	int len, kbd_col, i;
 
 	len = usbd_ep_read_packet(usbd_dev, 0x01, usb_rxbuf, sizeof(usb_rxbuf));
 
-	for (int i = 0; i < len; i++)
+	for (i = 0; i < len; i++)
 	{
 		kbd_col = -1;
-		switch (usb_rxbuf[i])
+		c = usb_rxbuf[i];
+		switch (c)
 		{
 		case '0' ... '9':
-			kbd_row = usb_rxbuf[i] - '0';
+			kbd_row = c - '0';
 			break;
 		case 'A' ... 'H': /* A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7 */
-			kbd_col = usb_rxbuf[i] - 'A';
+			kbd_col = c - 'A';
 			break;
 		case 'a' ... 'h': /* a=0, b=1, c=2, d=3, e=4, f=5, g=6, h=7 */
-			kbd_col = usb_rxbuf[i] - 'a';
+			kbd_col = c - 'a';
 			break;
 		case 'x':
 			for (int j = 0; j < 8; j++)
 				kbd_matrix[j] = 1uL << j;
 			kbd_matrix[8] = 0xaa;
 			kbd_matrix[9] = 0x55;
+			break;
+		case 's':
+			kbd_matrix[6] ^= 0x01; /* shift left */
+			break;
+		case 'S':
+			kbd_matrix[6] ^= 0x40; /* shift right */
 			break;
 		case 'z':
 			memset(kbd_matrix, '\0', sizeof(kbd_matrix));
@@ -315,13 +323,16 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 		case '-':
 			cdcacm_u32dump(usbd_dev, kbd_flags);
 			break;
+		case ',':
+			cdcacm_u32dump(usbd_dev, kbd_row);
+			break;
 		case '.':
 			gpio_toggle(GPIOC, 1 << 13);
 			break;
 		}
 		if (kbd_col != -1)
 		{
-			kbd_matrix[kbd_row] ^= (1UL << kbd_row);
+			kbd_matrix[kbd_row] ^= (1UL << kbd_col);
 		}
 	}
 }
