@@ -1,4 +1,4 @@
-
+#include "pet_kbd.h"
 
 const unsigned char pet_kbd_table_german[128] = {
     [8] = PET_KEY_E(8),                  /* Backspace */

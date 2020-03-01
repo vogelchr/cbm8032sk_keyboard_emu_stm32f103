@@ -23,13 +23,18 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
+#include <libopencm3/cm3/nvic.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
+#include <libopencm3/stm32/timer.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
 
+#include "ringbuf.h"
 #include "kbd_matrix.h"
+#include "pet_kbd.h"
 
 static const struct usb_device_descriptor dev = {
     .bLength = USB_DT_DEVICE_SIZE,
@@ -219,121 +224,53 @@ cdcacm_control_request(usbd_device *usbd_dev,
 	return 0;
 }
 
+static uint16_t kbd_queue[16];
+static uint16_t *volatile kbd_queue_readp = kbd_queue;
+static uint16_t *volatile kbd_queue_writep = kbd_queue;
+
+void tim2_isr()
+{
+	char c;
+
+	timer_clear_flag(TIM2, TIM_SR_UIF);
+
+	if (RINGBUF_GET(kbd_queue, kbd_queue_readp, kbd_queue_writep, &c))
+		return;
+
+	gpio_toggle(GPIOC, 1 << 13);
+}
+
+int serial_input_eat_char(unsigned char c)
+{
+	unsigned char kbd_code;
+
+	if (c < 128 && ((kbd_code = pet_kbd_table_german[c]) != 0))
+	{
+		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &kbd_code);
+	}
+}
+
 static char usb_rxbuf[64];
 static char usb_txbuf[64];
-
-static char hexnibble(unsigned char c)
-{
-	if (c < 10)
-		return '0' + c;
-	if (c < 16)
-	{
-		c -= 10;
-		return 'a' + c;
-	}
-	return '?';
-}
-
-static int
-cdcacm_hexdump(usbd_device *usbd_dev, unsigned char *data, size_t data_len)
-{
-	char *p;
-	size_t j, usb_len;
-
-	p = usb_txbuf;
-	for (j = 0; j < data_len; j++)
-	{
-		*p++ = hexnibble(data[j] >> 4);
-		*p++ = hexnibble(data[j] & 0x0f);
-		*p++ = ' ';
-	}
-
-	*p++ = '\r';
-	*p++ = '\n';
-
-	usb_len = p - usb_txbuf;
-	return usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, usb_len);
-}
-
-static int
-cdcacm_u32dump(usbd_device *usbd_dev, uint32_t data)
-{
-	char *p;
-	size_t j, usb_len;
-
-	p = usb_txbuf;
-	*p++ = hexnibble((data & 0xf0000000) >> 28);
-	*p++ = hexnibble((data & 0x0f000000) >> 24);
-	*p++ = hexnibble((data & 0x00f00000) >> 20);
-	*p++ = hexnibble((data & 0x000f0000) >> 16);
-	*p++ = hexnibble((data & 0x0000f000) >> 12);
-	*p++ = hexnibble((data & 0x00000f00) >> 8);
-	*p++ = hexnibble((data & 0x000000f0) >> 4);
-	*p++ = hexnibble((data & 0x0000000f));
-	*p++ = '\r';
-	*p++ = '\n';
-
-	usb_len = p - usb_txbuf;
-	return usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, usb_len);
-}
-
-static int kbd_row = 0;
 
 static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
 	(void)ep;
-	char c;
-	int len, kbd_col, i;
+	int len, i, k, j;
 
 	len = usbd_ep_read_packet(usbd_dev, 0x01, usb_rxbuf, sizeof(usb_rxbuf));
 
 	for (i = 0; i < len; i++)
 	{
-		kbd_col = -1;
-		c = usb_rxbuf[i];
-		switch (c)
+		char c = usb_rxbuf[i];
+		if (c == '\1') /* ctrl-a */
 		{
-		case '0' ... '9':
-			kbd_row = c - '0';
-			break;
-		case 'A' ... 'H': /* A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7 */
-			kbd_col = c - 'A';
-			break;
-		case 'a' ... 'h': /* a=0, b=1, c=2, d=3, e=4, f=5, g=6, h=7 */
-			kbd_col = c - 'a';
-			break;
-		case 'x':
-			for (int j = 0; j < 8; j++)
-				kbd_matrix[j] = 1uL << j;
-			kbd_matrix[8] = 0xaa;
-			kbd_matrix[9] = 0x55;
-			break;
-		case 's':
-			kbd_matrix[6] ^= 0x01; /* shift left */
-			break;
-		case 'S':
-			kbd_matrix[6] ^= 0x40; /* shift right */
-			break;
-		case 'z':
-			memset(kbd_matrix, '\0', sizeof(kbd_matrix));
-			break;
-		case '?':
-			cdcacm_hexdump(usbd_dev, kbd_matrix, sizeof(kbd_matrix));
-			break;
-		case '-':
-			cdcacm_u32dump(usbd_dev, kbd_flags);
-			break;
-		case ',':
-			cdcacm_u32dump(usbd_dev, kbd_row);
-			break;
-		case '.':
-			gpio_toggle(GPIOC, 1 << 13);
-			break;
+			j = snprintf(usb_txbuf, sizeof(usb_txbuf), "%p %p %p\r\n",
+				     kbd_queue, kbd_queue_readp, kbd_queue_writep);
+			usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
 		}
-		if (kbd_col != -1)
-		{
-			kbd_matrix[kbd_row] ^= (1UL << kbd_col);
-		}
+		else
+			serial_input_eat_char(c);
 	}
 }
 
@@ -355,11 +292,17 @@ int main(void)
 {
 	usbd_device *usbd_dev;
 
-	rcc_clock_setup_in_hsi_out_48mhz();
-	rcc_periph_clock_enable(RCC_AFIO);
+	/* === system clock initialization ===
+	   external 8MHz XTAL, SYSCLK=9(pll)*8MHz=72MHz, AHB 72MHz(max),
+	   ADC 9MHz(14MHz max), APB1=36MHz(max), APB2=72MHz(max),
+	   flash has 2 waitstates  */
+	rcc_clock_setup_in_hse_8mhz_out_72mhz();
 
+	/* === disable JTAG, enable SWD === */
+	rcc_periph_clock_enable(RCC_AFIO);
 	AFIO_MAPR |= AFIO_MAPR_SWJ_CFG_JTAG_OFF_SW_ON;
 
+	/* === USB === */
 	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver,
 			     &dev,
 			     &config,
@@ -369,18 +312,38 @@ int main(void)
 			     sizeof(usbd_control_buffer));
 	usbd_register_set_config_callback(usbd_dev, cdcacm_set_config);
 
-	rcc_periph_clock_enable(RCC_GPIOA);
-	rcc_periph_clock_enable(RCC_GPIOB);
-	rcc_periph_clock_enable(RCC_GPIOC);
+	/* === Timer2 init === */
+	rcc_periph_clock_enable(RCC_TIM2);
+	rcc_periph_reset_pulse(RST_TIM2);
+	nvic_enable_irq(NVIC_TIM2_IRQ);
 
+	timer_set_mode(TIM2, TIM_CR1_CKD_CK_INT,
+		       TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+	/* APB1 clock is 36MHz, but there is the TIMXCLK which
+	   is APB2 clock x2 if the APB prescaler is used,
+	   see STM32F1xx ref manual, Low-, medium-, high- and
+	   XL-density reset and clock control (RCC),
+	   page 93/1134 */
+
+	timer_set_prescaler(TIM2, 36000); /* 36MHz * 2 / 36'000 = 2kHz  */
+	timer_set_period(TIM2, 200);	  /* 2kHz / 200 = 10 Hz overflow */
+	timer_enable_counter(TIM2);
+	timer_enable_irq(TIM2, TIM_DIER_UIE);
+
+	/* === debug LED === */
+	rcc_periph_clock_enable(RCC_GPIOC);
 	gpio_set_mode(GPIOC,
 		      GPIO_MODE_OUTPUT_50_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL,
 		      GPIO13);
-	gpio_set(GPIOC, 1UL << 13);
+	gpio_clear(GPIOC, 1UL << 13);
 
+	/* === keyboard matrix === */
+	rcc_periph_clock_enable(RCC_GPIOA);
+	rcc_periph_clock_enable(RCC_GPIOB);
 	kbd_matrix_init();
 
+	/* === main loop === */
 	while (1)
 	{
 		kbd_matrix_update();

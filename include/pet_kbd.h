@@ -17,8 +17,10 @@
 #define PET_KEY_G(v) (0x60 | (0x0f & ((v) + 1)))
 #define PET_KEY_H(v) (0x70 | (0x0f & ((v) + 1)))
 
-#define PET_COLUMN(v) (((v) >> 4) & 0x07) /* bits 6 downto 4 */
-#define PET_COLUMN(v) (((v)&0x0f) - 1)    /* bits 3 downto 0, minus 1 */
+#define PET_COLUMN(v) (((v) >> 4) & 0x07) /* bits 6 downto 4, => 0..7 */
+#define PET_ROW(v) (((v)&0x0f) - 1)    /* bits 3 downto 0, minus 1, => 0..9 */
+
+#define PET_KEY_SHIFT 0x80
 
 extern const unsigned char pet_kbd_table_german[];
 
