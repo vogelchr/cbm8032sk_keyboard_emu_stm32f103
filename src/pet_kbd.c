@@ -2,6 +2,7 @@
 
 const unsigned char pet_kbd_table_german[128] = {
     [8] = PET_KEY_E(8),                  /* Backspace */
+    [13] = PET_KEY_E(3),                 /* Return */
     [32] = PET_KEY_C(8),                 /* SPACE  */
     [33] = PET_KEY_SHIFT | PET_KEY_A(1), /* ! */
     [34] = PET_KEY_SHIFT | PET_KEY_A(0), /* " */

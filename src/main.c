@@ -272,7 +272,9 @@ int serial_input_eat_char(unsigned char c)
 			q = PET_KEY_A(6); /* release A6 = left shift */
 			RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
 		}
+		return 0;
 	}
+	return -1;
 }
 
 static char usb_rxbuf[64];
@@ -294,8 +296,13 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 				     kbd_queue, kbd_queue_readp, kbd_queue_writep);
 			usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
 		}
-		else
-			serial_input_eat_char(c);
+		else {
+			if(serial_input_eat_char(c)) {
+				j = snprintf(usb_txbuf, sizeof(usb_txbuf), "?0x%02x\r\n",
+						(unsigned int)c);
+				usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
+			}
+		}
 	}
 }
 
