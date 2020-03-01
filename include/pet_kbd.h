@@ -6,7 +6,13 @@
 /* PET_KEY_column(row)
    column = A..H for signals Kin0..Kin7, on pins A..F,H,J on connector J5
    row = *0*..*9* (labeled 1..10 on keyboard schematic) are the output
-   of the binary-to-BCD decoder chip */
+   of the binary-to-BCD decoder chip
+
+
+   We add +1 to the LSB so that we can distinguish an empty keyboard slot
+    (=0) from a keyboard slot refering to row 0, column 0 = 0x01.
+
+*/
 
 #define PET_KEY_A(v) (0x00 | (0x0f & ((v) + 1)))
 #define PET_KEY_B(v) (0x10 | (0x0f & ((v) + 1)))

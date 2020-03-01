@@ -231,11 +231,20 @@ static uint16_t *volatile kbd_queue_writep = kbd_queue;
 void tim2_isr()
 {
 	char c;
+	int row, col;
 
 	timer_clear_flag(TIM2, TIM_SR_UIF);
 
 	if (RINGBUF_GET(kbd_queue, kbd_queue_readp, kbd_queue_writep, &c))
 		return;
+
+	row = PET_ROW(c);
+	col = PET_COLUMN(c);
+
+	if (c & PET_KEY_SHIFT) /* abusing shift as press/release */
+		kbd_matrix[row] |= (1UL << col);
+	else
+		kbd_matrix[row] &= ~(1UL << col);
 
 	gpio_toggle(GPIOC, 1 << 13);
 }
@@ -243,10 +252,26 @@ void tim2_isr()
 int serial_input_eat_char(unsigned char c)
 {
 	unsigned char kbd_code;
+	uint16_t q;
 
 	if (c < 128 && ((kbd_code = pet_kbd_table_german[c]) != 0))
 	{
-		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &kbd_code);
+
+		if (kbd_code & PET_KEY_SHIFT) {
+			q = PET_KEY_A(6) | PET_KEY_SHIFT; /* pree A6 = left shift */
+			RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+		}
+
+		/* in the queue we are abusing the MSB for press/release! */
+		q = kbd_code | PET_KEY_SHIFT; /* press */
+		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+		q &= ~PET_KEY_SHIFT; /* release */
+		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+
+		if (kbd_code & PET_KEY_SHIFT) {
+			q = PET_KEY_A(6); /* release A6 = left shift */
+			RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+		}
 	}
 }
 
@@ -256,7 +281,7 @@ static char usb_txbuf[64];
 static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
 	(void)ep;
-	int len, i, k, j;
+	int len, i, j;
 
 	len = usbd_ep_read_packet(usbd_dev, 0x01, usb_rxbuf, sizeof(usb_rxbuf));
 
