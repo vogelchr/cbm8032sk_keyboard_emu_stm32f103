@@ -224,7 +224,7 @@ cdcacm_control_request(usbd_device *usbd_dev,
 	return 0;
 }
 
-static uint16_t kbd_queue[16];
+static uint16_t kbd_queue[32];
 static uint16_t *volatile kbd_queue_readp = kbd_queue;
 static uint16_t *volatile kbd_queue_writep = kbd_queue;
 
@@ -317,17 +317,23 @@ int serial_input_eat_char(unsigned char c)
 		state = STATE_IDLE;
 		switch (c)
 		{
-		case 'D':
+		case 'D':/* left */
+			/* Key F0 is ^^ CRSR vv */
 			put_key(PET_KEY_SHIFT | PET_KEY_F(0));
-			return 0; /* left */
-		case 'C':
+			return 0; 
+		case 'C':/* right */
 			put_key(PET_KEY_F(0));
-			return 0; /* right */
-		case 'A':
-//			put_key();
+			return 0; 
+		case 'A': /* up */
+			/* Key F1 is <== CRSR ==> */
+			put_key(PET_KEY_SHIFT | PET_KEY_F(1));
 			return 0;
-		case 'B':
-//			put_key();
+		case 'B': /* down */
+			put_key(PET_KEY_F(1));
+			return 0;
+		case 'H': /* home, "pos1" */
+			/* Key E9 is CLR/HOME */
+			put_key(PET_KET_E(9));
 			return 0;
 		}
 		return -1;
@@ -381,7 +387,7 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 				     kbd_queue, kbd_queue_readp, kbd_queue_writep);
 			usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
 		}
-		else if (c == '\b') /* ctrl-b */
+		else if (c == '\2') /* ctrl-b */
 		{
 			j = snprintf(usb_txbuf, sizeof(usb_txbuf),
 				     "M:%02x%02x%02x%02x:%02x%02x%02x%02x:%02x%02x\r\n",
