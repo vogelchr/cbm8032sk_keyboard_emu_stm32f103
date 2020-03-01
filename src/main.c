@@ -249,32 +249,117 @@ void tim2_isr()
 	gpio_toggle(GPIOC, 1 << 13);
 }
 
+void put_key(unsigned char kbd_code)
+{
+	uint16_t q;
+	if (kbd_code & PET_KEY_SHIFT)
+	{
+		q = PET_KEY_A(6) | PET_KEY_SHIFT; /* pree A6 = left shift */
+		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+	}
+
+	/* in the queue we are abusing the MSB for press/release! */
+	q = kbd_code | PET_KEY_SHIFT; /* press */
+	RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+	q &= ~PET_KEY_SHIFT; /* release */
+	RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+
+	if (kbd_code & PET_KEY_SHIFT)
+	{
+		q = PET_KEY_A(6); /* release A6 = left shift */
+		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+	}
+}
+
+enum serial_input_state
+{
+	STATE_IDLE,
+	STATE_ESC, /* after having received ESC */
+	STATE_ESC_BRACKET, /* ESC [ */
+	STATE_CTRL_C, /* Ctrl C */
+	STATE_CTRL_C_COL, /* Ctrl-C [A-Ha-h] */
+};
+
 int serial_input_eat_char(unsigned char c)
 {
 	unsigned char kbd_code;
-	uint16_t q;
+	static enum serial_input_state state;
+	static char ctrl_c_code;
 
-	if (c < 128 && ((kbd_code = pet_kbd_table_german[c]) != 0))
+	switch (state)
 	{
-
-		if (kbd_code & PET_KEY_SHIFT) {
-			q = PET_KEY_A(6) | PET_KEY_SHIFT; /* pree A6 = left shift */
-			RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+	case STATE_IDLE:
+		if (c == '\033')
+		{
+			state = STATE_ESC;
+			return 0;
 		}
-
-		/* in the queue we are abusing the MSB for press/release! */
-		q = kbd_code | PET_KEY_SHIFT; /* press */
-		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
-		q &= ~PET_KEY_SHIFT; /* release */
-		RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
-
-		if (kbd_code & PET_KEY_SHIFT) {
-			q = PET_KEY_A(6); /* release A6 = left shift */
-			RINGBUF_PUT(kbd_queue, kbd_queue_readp, kbd_queue_writep, &q);
+		if (c == '\3')
+		{ /* Ctrl-C */
+			state = STATE_CTRL_C;
+			return 0;
 		}
-		return 0;
+		if (c < 128 && ((kbd_code = pet_kbd_table_german[c]) != 0))
+		{
+			put_key(kbd_code);
+			return 0;
+		}
+		return -1;
+	case STATE_ESC:
+		if (c == '[')
+		{
+			state = STATE_ESC_BRACKET;
+			return 0;
+		}
+		state = STATE_IDLE;
+		return -1;
+	case STATE_ESC_BRACKET:
+		state = STATE_IDLE;
+		switch (c)
+		{
+		case 'D':
+			put_key(PET_KEY_SHIFT | PET_KEY_F(0));
+			return 0; /* left */
+		case 'C':
+			put_key(PET_KEY_F(0));
+			return 0; /* right */
+		case 'A':
+//			put_key();
+			return 0;
+		case 'B':
+//			put_key();
+			return 0;
+		}
+		return -1;
+	case STATE_CTRL_C:
+		switch (c)
+		{
+		case 'A' ... 'H':
+			ctrl_c_code = PET_KEY_SHIFT | ((c - 'A') << 4);
+			state = STATE_CTRL_C_COL;
+			return 0;
+		case 'a' ... 'h':
+			ctrl_c_code = ((c - 'a') << 4);
+			state = STATE_CTRL_C_COL;
+			return 0;
+		default:
+			state = STATE_IDLE;
+			return -1;
+		}
+	case STATE_CTRL_C_COL:
+		state = STATE_IDLE;
+		switch(c)
+		{
+		case '0' ... '9':
+			ctrl_c_code |= (c - '0') + 1;
+			put_key(ctrl_c_code);
+			return 0;
+		default:
+			return -1;
+		}
+	default:
+		return -1;
 	}
-	return -1;
 }
 
 static char usb_rxbuf[64];
@@ -292,14 +377,25 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 		char c = usb_rxbuf[i];
 		if (c == '\1') /* ctrl-a */
 		{
-			j = snprintf(usb_txbuf, sizeof(usb_txbuf), "%p %p %p\r\n",
+			j = snprintf(usb_txbuf, sizeof(usb_txbuf), "Q:%p %p %p\r\n",
 				     kbd_queue, kbd_queue_readp, kbd_queue_writep);
 			usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
 		}
-		else {
-			if(serial_input_eat_char(c)) {
+		else if (c == '\b') /* ctrl-b */
+		{
+			j = snprintf(usb_txbuf, sizeof(usb_txbuf),
+				     "M:%02x%02x%02x%02x:%02x%02x%02x%02x:%02x%02x\r\n",
+				     kbd_matrix[0], kbd_matrix[1], kbd_matrix[2], kbd_matrix[3],
+				     kbd_matrix[4], kbd_matrix[5], kbd_matrix[6], kbd_matrix[7],
+				     kbd_matrix[8], kbd_matrix[9]);
+			usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
+		}
+		else
+		{
+			if (serial_input_eat_char(c))
+			{
 				j = snprintf(usb_txbuf, sizeof(usb_txbuf), "?0x%02x\r\n",
-						(unsigned int)c);
+					     (unsigned int)c);
 				usbd_ep_write_packet(usbd_dev, 0x82, usb_txbuf, j);
 			}
 		}
